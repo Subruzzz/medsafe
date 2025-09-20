@@ -1,51 +1,61 @@
 import os
 import requests
-from typing import Dict
+from dotenv import load_dotenv
 
-SAFETY_REFUSAL = (
-    "I can’t provide medical advice, dosing, diagnosis, or urgent guidance. "
-    "Use this app for education only and consult a licensed clinician."
-)
+# Load environment variables from .env
+load_dotenv()
 
-HELP_TEXT = (
-    "You can: 1) Enter multiple drug names to check potential interactions, "
-    "2) Paste a prescription to extract likely drug names, "
-    "3) View non-binding alternatives (same ingredient), and "
-    "4) Export your session as CSV. This is not medical advice."
-)
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+# Default to an IBM Granite model on Hugging Face if not set
+IBM_MODEL_ID = os.getenv("IBM_MODEL_ID", "ibm-granite/granite-3.3-2b-instruct")
 
-def is_medical_question(msg: str) -> bool:
-    m = msg.lower()
-    keywords = [
-        "dose", "dosage", "how much", "take with", "take if", "pregnant",
-        "breastfeed", "contraindication", "kidney", "liver", "interaction with",
-        "can i take", "should i take", "is it safe", "side effect", "symptom",
-        "treat", "cure", "diagnose", "blood pressure", "diabetes", "child", "baby"
-    ]
-    return any(k in m for k in keywords)
+API_URL = f"https://api-inference.huggingface.co/models/{IBM_MODEL_ID}"
+HEADERS = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
-def chat_reply(message: str) -> Dict[str, str]:
-    if is_medical_question(message):
-        return {"role": "assistant", "content": SAFETY_REFUSAL}
 
-    token = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
-    if not token:
-        return {"role": "assistant", "content": HELP_TEXT}
+class ChatbotService:
+    """
+    Chatbot service that uses an IBM Granite model hosted on Hugging Face.
+    """
 
-    endpoint = "https://api-inference.huggingface.co/models/google/flan-t5-base"
-    headers = {"Authorization": f"Bearer {token}"}
-    prompt = (
-        "You are a cautious assistant for a non-clinical drug interaction demo app. "
-        "Never give medical advice or dosing. If asked medical questions, refuse. "
-        "Answer briefly and helpfully about how to use the app. "
-        f"User: {message}\nAssistant:"
-    )
-    try:
-        r = requests.post(endpoint, headers=headers, json={"inputs": prompt, "parameters": {"max_new_tokens": 128}}, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, list) and data:
-            return {"role": "assistant", "content": data[0].get("generated_text", HELP_TEXT)}
-        return {"role": "assistant", "content": HELP_TEXT}
-    except Exception:
-        return {"role": "assistant", "content": HELP_TEXT}
+    def __init__(self, model_id: str = IBM_MODEL_ID):
+        self.model_id = model_id
+        self.api_url = f"https://api-inference.huggingface.co/models/{model_id}"
+        self.headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+
+    def ask(self, prompt: str) -> str:
+        """
+        Sends a prompt to the IBM Granite model and returns the generated text.
+        """
+        if not HF_API_TOKEN:
+            raise ValueError("Hugging Face API token not found in environment variables.")
+
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": 300,
+                "temperature": 0.7,
+                "return_full_text": False
+            }
+        }
+
+        try:
+            response = requests.post(self.api_url, headers=self.headers, json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+
+            # Hugging Face returns a list of dicts with 'generated_text'
+            if isinstance(data, list) and "generated_text" in data[0]:
+                return data[0]["generated_text"].strip()
+            else:
+                return str(data)
+
+        except requests.exceptions.RequestException as e:
+            return f"Error communicating with IBM Granite model: {e}"
+
+
+# Example usage (for testing only)
+if __name__ == "__main__":
+    bot = ChatbotService()
+    reply = bot.ask("List possible side effects of ibuprofen.")
+    print("Bot:", reply)
